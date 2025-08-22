@@ -1,3 +1,22 @@
+/*
+Minimal demo of Frontier Tower OAuth
+
+To use:
+  1. Generate a .secrets.json file
+  2. Run `deno run --allow-net --allow-read --allow-write --unstable-kv --watch ./main.ts 3141`
+  3. Go to the server and make sure the server matches `REDIRECT_URI` in `.secrets.json`.
+  4. Auth & deauth
+  5. The webapp also has basic notes functionality that is preservered across sessions for a given user.
+
+Design:
+  0. Identify the browser with a cookie.
+  1.  Check if that cookie has an OAuth Token in KV
+  2.  Create a login page
+  3. Convert the OAuth code to an OAuth token
+  4. Get some useful private data from the API.
+  5. Save data to KV for authenticated users
+  6. Revoke the OAuth token
+*/
 //////// deno run --allow-net --allow-read --allow-write --unstable-kv --watch ./main.ts 3141
 
 const start = Date.now();
@@ -7,33 +26,26 @@ function log(msg: string) {
 }
 
 const CONFIG = {
-    port: parseInt(Deno.args.at(0) || "3141"),
+    port: parseInt(Deno.args.at(0) || "9002"),
 
-    /*
-        {
-            "CLIENT_ID": "O..................V",
-            "SECRET": "4......................................0",
-            "REDIRECT_URI": "https://..../api/oauth"
-        }
-    */
-    secretsJson: '.secrets.json',
+    // Url of the app server that recieves the callback from Oauth server.
+    // It should match this path.
+    REDIRECT_URI: `https://9000-firebase-oauthtest-1755815235789.cluster-cmxrewsem5htqvkvaud2drgfr4.cloudworkstations.dev/api/oauth`,
 
-    // OAuth server GET endpoint for step 1
-////oauthAuthorizeUrl: "https://api.berlinhouse.com/o/authorize/",
+//    oauthAuthorizeUrl: "https://api.berlinhouse.com/o/authorize/",
     oauthAuthorizeUrl: "https://github.com/login/oauth/authorize?scope=read:user&response_type=code",
     // OAuth server POST endpoint for step 2
-////oauthTokenUrl: "https://api.berlinhouse.com/o/token/",
+//    oauthTokenUrl: "https://api.berlinhouse.com/o/token/",
     oauthTokenUrl: "https://github.com/login/oauth/access_token",
 
     // Url of the app server that recieves the callback from Oauth server is in SECRETS. It should match this path.
     callbackPath: "/api/oauth",
-
     kvPath: ".kv",
 }
 
-const SECRETS = JSON.parse(await Deno.readTextFile(CONFIG.secretsJson));
-if (new URL(SECRETS.REDIRECT_URI).pathname !== CONFIG.callbackPath) {
-    throw Error(`.secrets.json redirect_uri's path "${SECRETS.REDIRECT_URI}" must match callbackPath "${CONFIG.callbackPath}"`);
+const SECRETS = Deno.env.toObject();
+if (new URL(CONFIG.REDIRECT_URI).pathname !== CONFIG.callbackPath) {
+    throw Error(`CONFIG redirect_uri's path "${CONFIG.REDIRECT_URI}" must match callbackPath "${CONFIG.callbackPath}"`);
 }
 
 // OAuth call to revoke token from step 2 above
@@ -146,15 +158,16 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
             await kv.set(['cookies', cookie, 'CSRF'], CSRF);
             log(`  Saved CSRF for ${cookie}: ${CSRF}`);
             const oAuthLoginLink =
-                `${CONFIG.oauthAuthorizeUrl}` +              // Oauth server's auth endpoint
-                `&client_id=${SECRETS.CLIENT_ID}` +          // Hardcoded OAuth server's login information for this app
-                `&redirect_uri=${SECRETS.REDIRECT_URI}` +    // Where the browser goes once the OAuth succeeds
-                `&state=${CSRF}`;
+                `${CONFIG.oauthAuthorizeUrl}?` +           // Oauth server's auth endpoint
+                `response_type=code&scope=read&` +         // Read access to API
+                `client_id=${SECRETS.CLIENT_ID}&` +        // OAuth server's login information for this app from env var
+                `redirect_uri=${CONFIG.REDIRECT_URI}&` +  // Where the browser goes once the OAuth succeeds
+                `state=${CSRF}`;
 
             return new Response(`${PREFIX}
                     <h1>OAuth Login Page</h1>
                     <p>Cookie ${cookie} not authenticated.</p>
-                    <a href="${oAuthLoginLink}">Login with GitHub</a>
+                    <a href="${oAuthLoginLink}">Login with FT</a>
                 ${SUFFIX}`,
                 { headers: responseHeaders },
             );
