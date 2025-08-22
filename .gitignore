@@ -1,0 +1,6 @@
+.idx/
+.vscode/
+
+.secrets.json
+
+.kv*
