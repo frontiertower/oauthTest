@@ -74,7 +74,7 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
         log(`  Cookie ${cookie} does not have OAuth token`);
     }
 
-    //////// Define HTTP endpoints for "/" and "/api/oauth"
+    //////// Define HTTP endpoints for "/" and "/api/*"
     // Simple HTML to avoid frontend frameworks
     const PREFIX = `<!DOCTYPE html>
 <html>
@@ -100,13 +100,43 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
                 }
             });
             const json = await response.json();
+            const uid = json.id;
+            kv.set(['cookies', cookie, 'id'], uid);
+
+            const data = await kv.get(['database', uid, 'data']);
 
             return new Response(`${PREFIX}
-                    <h1>OAuth User Page</h1>
+                    <h1>OAuth User Page for User ${uid}</h1>
                     <p>Cookie: ${cookie}</p>
                     <p><b>API call: ${response.status === 200 ? "SUCCESS" : "FAILED"}</b></p>
                     <pre>${JSON.stringify(json, null, 2)}</pre>
-                    <a href="/api/logout">Log out</a>
+                    <textarea id="data" rows=10 cols=50>${data.value}</textarea>
+                    <br/>
+                    <button onclick="save()">Save</button>
+                    <button onclick="logout()">Log out</button>
+                    <br/>
+                    <script>
+                        async function save() {
+                            const data = document.getElementById('data').value;
+                            const response = await fetch('/api/kv', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'text/plain',
+                                },
+                                body: data,
+                            });
+                            if (response.ok) {
+                                console.log('Data saved successfully!');
+                            } else {
+                                console.error('Failed to save data:', response.status);
+                            }
+                        }
+
+                        async function logout() {
+                            const response = await fetch('/api/logout', {method: 'POST'});
+                            window.location.href = '/';
+                        }
+                    </script>
                     ${SUFFIX}`,
                 { headers: responseHeaders },
             );
@@ -168,8 +198,8 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
             ${SUFFIX}`,
             { headers: responseHeaders },
         );
-    } else if (pathname === "/api/logout") {
-        //////// Step 5: Revoke the OAuth token
+    } else if (pathname === "/api/logout" && req.method === "POST") {
+        //////// Step 6: Revoke the OAuth token
         const authRecord = await kv.get(['cookies', cookie, 'token']);
         if (authRecord.value) {
             const response = await fetch(oauthTokenRevokeUrl, {
@@ -194,11 +224,34 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
                 });
             } else {
                 log(`  Revoke OAuth token FAILED for ${cookie}: ${authRecord.value.substring(0, 8) + ".".repeat(authRecord.value.length - 8)}`);
+                return new Response("Logout failed", { status: 500 });
             }
         } else {
             log(`  Cookie ${cookie} does not have OAuth token`);
+            return new Response(null, { // Redirect even if no token was found for logout
+                status: 303,
+                headers: { 'Location': '/' },
+            });
         }
-
+    } else if (pathname === "/api/kv" && req.method === "POST") {
+        //////// Step 5: Save data to KV for authenticated users
+        const authRecord = await kv.get(['cookies', cookie, 'token']);
+        if (authRecord.value) {
+            const uidRecord = await kv.get(['cookies', cookie, 'id']);
+            const uid = uidRecord.value;
+            if (uid) {
+                const data = await req.text();
+                await kv.set(['database', uid, 'data'], data);
+                log(`  Saved data for user ${uid}`);
+                return new Response("Data saved", { status: 200 });
+            } else {
+                log(`  User ${cookie} is authenticated but no uid found`);
+                return new Response("User ID not found", { status: 401 });
+            }
+        } else {
+            log(`  User ${cookie} is not authenticated for /api/kv`);
+            return new Response("Unauthorized", { status: 401 });
+        }
     }
 
     return new Response(
