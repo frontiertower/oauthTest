@@ -28,32 +28,52 @@ function log(msg: string) {
 const CONFIG = {
     port: parseInt(Deno.args.at(0) || "9002"),
 
-    // Url of the app server that recieves the callback from Oauth server.
-    // It should match this path.
-    REDIRECT_URI: `https://9000-firebase-oauthtest-1755815235789.cluster-cmxrewsem5htqvkvaud2drgfr4.cloudworkstations.dev/api/oauth`,
-
-//    oauthAuthorizeUrl: "https://api.berlinhouse.com/o/authorize/",
-    oauthAuthorizeUrl: "https://github.com/login/oauth/authorize?scope=read:user&response_type=code",
-    // OAuth server POST endpoint for step 2
-//    oauthTokenUrl: "https://api.berlinhouse.com/o/token/",
-    oauthTokenUrl: "https://github.com/login/oauth/access_token",
-
-    // Url of the app server that recieves the callback from Oauth server is in SECRETS. It should match this path.
+    REDIRECT_URI: `https://9000-firebase-oauthtest-1755815235789.cluster-cmxrewsem5htqvkvaud2drgfr4.cloudworkstations.dev/api/oauth`, // Url of the app server that recieves the callback from Oauth server.
+    oauthAuthorizeUrl: "https://api.berlinhouse.com/o/authorize/", // Oauth server's auth endpoint for step 2
+    oauthTokenUrl: "https://api.berlinhouse.com/o/token/", // OAuth server POST endpoint for step 3
+    oauthRevokeUrl: "https://api.berlinhouse.com/o/revoke_token/", // OAuth call to revoke token from step 6
     callbackPath: "/api/oauth",
     kvPath: ".kv",
 }
-
 const SECRETS = Deno.env.toObject();
 if (new URL(CONFIG.REDIRECT_URI).pathname !== CONFIG.callbackPath) {
     throw Error(`CONFIG redirect_uri's path "${CONFIG.REDIRECT_URI}" must match callbackPath "${CONFIG.callbackPath}"`);
 }
 
-// OAuth call to revoke token from step 2 above
-const oauthTokenRevokeUrl = `https://api.github.com/applications/${SECRETS.client_id}/token`;
-
 log(`Booting @ ${new Date()}`);
 
 const kv = await Deno.openKv(CONFIG.kvPath); // Deno key-value store.
+
+function generate_code_verifier(): string {
+    const array = new Uint8Array(64); // 64 bytes for 512 bits of entropy
+    crypto.getRandomValues(array);
+    // Base64 URL-safe encode without padding
+    return btoa(String.fromCharCode(...array))
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+}
+
+async function generate_code_challenge(code_verifier: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(code_verifier);
+    // SHA-256 hash
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    // Convert buffer to byte array
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    // Convert byte array to binary string
+    const binaryString = hashArray.map(byte => String.fromCharCode(byte)).join('');
+    // Base64 URL-safe encode without padding
+    return btoa(binaryString)
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+}
+
+
+
+
+
 async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Promise<Response> {
     const url = new URL(req.url);
     const pathname = url.pathname;
@@ -104,15 +124,16 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
     if (pathname === "/") {
         if (isAuthenticated) {
             //////// Step 4: Get some useful private data from the API.
-            //const response = await fetch('https://api.berlinhouse.io/auth/users/me/', {
-            const response = await fetch('https://api.github.com/user', {
-                headers: {
-                    "Accept": "application/json",
-                    "Authorization": `Bearer ${authRecord.value}`,
-                }
+            const headers = {
+                "Accept": "application/json",
+                "Authorization": `${authRecord.value.token_type} ${authRecord.value.access_token}`,
+            }
+
+            const response = await fetch(`https://api.berlinhouse.com/o/userinfo/`, {
+                headers
             });
             const json = await response.json();
-            const uid = json.id;
+            const uid = json.sub;
             kv.set(['cookies', cookie, 'id'], uid);
 
             const data = await kv.get(['database', uid, 'data']);
@@ -157,12 +178,20 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
             const CSRF = crypto.randomUUID();  // https://en.wikipedia.org/wiki/Cross-site_request_forgery
             await kv.set(['cookies', cookie, 'CSRF'], CSRF);
             log(`  Saved CSRF for ${cookie}: ${CSRF}`);
+
+            const code_verifier = await generate_code_verifier();
+            await kv.set(['cookies', cookie, 'code_verifier'], code_verifier);
+            const code_challenge = await generate_code_challenge(code_verifier);
+
             const oAuthLoginLink =
-                `${CONFIG.oauthAuthorizeUrl}?` +           // Oauth server's auth endpoint
-                `response_type=code&scope=read&` +         // Read access to API
-                `client_id=${SECRETS.CLIENT_ID}&` +        // OAuth server's login information for this app from env var
-                `redirect_uri=${CONFIG.REDIRECT_URI}&` +  // Where the browser goes once the OAuth succeeds
-                `state=${CSRF}`;
+                `${CONFIG.oauthAuthorizeUrl}` +
+                `?response_type=code` +
+                `&client_id=${SECRETS.CLIENT_ID}` +
+                `&redirect_uri=${encodeURIComponent(CONFIG.REDIRECT_URI)}` +
+                `&scope=read write openid` +
+                `&state=${CSRF}` +
+                `&code_challenge=${code_challenge}` +
+                `&code_challenge_method=S256`;
 
             return new Response(`${PREFIX}
                     <h1>OAuth Login Page</h1>
@@ -175,26 +204,34 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
     } else if (pathname === CONFIG.callbackPath) {
         const params = new URLSearchParams(url.search);
         const oAuthCode = params.get("code");
+        const codeVerifierRecord = await kv.get(['cookies', cookie, 'code_verifier']);
+        const code_verifier = codeVerifierRecord.value;
         const csrfState = params.get("state");
         const csrf = await kv.get(['cookies', cookie, 'CSRF']);
 
         //////// Step 3: Convert the OAuth code to an OAuth token
+        const body = new URLSearchParams({
+            'grant_type': 'authorization_code',
+            'code': oAuthCode!, // Use non-null assertion as code should be present
+            'redirect_uri': CONFIG.REDIRECT_URI,
+            'client_id': SECRETS.CLIENT_ID,
+            'client_secret': SECRETS.CLIENT_SECRET,
+            'code_verifier': code_verifier!, // Use non-null assertion as code_verifier should be present
+        }).toString();
+        log(`  Token exchange request body: ${body}`);
+
         const response = await fetch(CONFIG.oauthTokenUrl, {
+
             method: "POST",
             headers: {
-                "Accept": "application/json",
-                "Content-Type": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
             },
-            body: JSON.stringify({
-                client_id: SECRETS.CLIENT_ID,
-                client_secret: SECRETS.CLIENT_SECRET,
-                code: oAuthCode,
-            })
+            body
         });
         const data = await response.json();
         if (!data.error) {
             // SUCCESS. Foward the user back to the main page
-            await kv.set(['cookies', cookie, 'token'], data.access_token);
+            await kv.set(['cookies', cookie, 'token'], data);
             log(`  Saved OAuth token for ${cookie}: ${data.access_token.substring(0, 8) + ".".repeat(data.access_token.length - 8)}`);
             log(`  Sending user home.`);
             return new Response(null, {
@@ -205,7 +242,6 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
 
         return new Response(`${PREFIX}
                 <h1>OAuth Callback Endpoint FAILED</h1>
-                <p>OAuth Code: "${oAuthCode}"</p></p>
                 <p>CSRF State: "${csrfState}" ${csrfState === csrf.value ? "matches" : "does not match"} stored CSRF code "${csrf.value}".</p>
                 <p>POST Response: ${JSON.stringify(data)}</p>
             ${SUFFIX}`,
@@ -215,10 +251,10 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
         //////// Step 6: Revoke the OAuth token
         const authRecord = await kv.get(['cookies', cookie, 'token']);
         if (authRecord.value) {
-            const response = await fetch(oauthTokenRevokeUrl, {
+            await kv.delete(['cookies', cookie, 'token']);
+            const response = await fetch(CONFIG.oauthRevokeUrl, {
                 method: "POST",
                 headers: {
-                    "Accept": "application/json",
                     "Content-Type": "application/json",
                 },
                 body: JSON.stringify({
@@ -236,7 +272,7 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
                     headers: { 'Location': '/' },
                 });
             } else {
-                log(`  Revoke OAuth token FAILED for ${cookie}: ${authRecord.value.substring(0, 8) + ".".repeat(authRecord.value.length - 8)}`);
+                log(`  Revoke OAuth token FAILED for ${cookie}`);
                 return new Response("Logout failed", { status: 500 });
             }
         } else {
