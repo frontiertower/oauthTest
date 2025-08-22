@@ -30,13 +30,24 @@ import base64
 # Replace these values with your actual OAuth client credentials
 CLIENT_ID = os.environ.get("CLIENT_ID")
 CLIENT_SECRET = os.environ.get("CLIENT_SECRET")
-REDIRECT_URI = "http://localhost:8001/oauth/callback"
-# API_BASE_URL = "http://localhost:8000"  # Replace with your API base URL if different
+
+# Debug output to check environment variables
+print("\nCLIENT_ID:", CLIENT_ID)
+print("CLIENT_SECRET:", CLIENT_SECRET[:5] + "..." if CLIENT_SECRET else None)
+
+# Fallback to hardcoded values if environment variables are not set
+if not CLIENT_ID or not CLIENT_SECRET:
+    print("Warning: Environment variables not set, using hardcoded credentials")
+    # Uncomment and set these if needed:
+    # CLIENT_ID = "your_client_id_here"
+    # CLIENT_SECRET = "your_client_secret_here"
+    
+REDIRECT_URI = "https://9000-firebase-oauthtest-1755815235789.cluster-cmxrewsem5htqvkvaud2drgfr4.cloudworkstations.dev/api/oauth"
 API_BASE_URL = "https://api.berlinhouse.com"
 AUTHORIZATION_URL = f"{API_BASE_URL}/o/authorize/"
 TOKEN_URL = f"{API_BASE_URL}/o/token/"
-USER_INFO_URL = f"{API_BASE_URL}/auth/users/me/"
-SCOPES = ["read", "write"]
+USER_INFO_URL = f"{API_BASE_URL}/o/userinfo/"
+SCOPES = ["read", "write", "openid"]
 
 # Store for our authorization data
 auth_data = {
@@ -98,7 +109,7 @@ class CallbackHandler(BaseHTTPRequestHandler):
 
 def start_callback_server():
     """Start HTTP server to handle the OAuth callback."""
-    server = HTTPServer(('localhost', 8001), CallbackHandler)
+    server = HTTPServer(('localhost', 9002), CallbackHandler)
     server.received_code = False
     
     # Run server in a separate thread
@@ -106,7 +117,7 @@ def start_callback_server():
     server_thread.daemon = True
     server_thread.start()
     
-    print(f"Callback server running on http://localhost:8001")
+    print(f"Callback server running on http://localhost:9002")
     
     return server
 
@@ -151,6 +162,14 @@ def generate_authorization_url():
 
 def exchange_code_for_tokens(code):
     """Exchange authorization code for access and refresh tokens."""
+    # Print debug info
+    print("\nExchanging code for tokens with:")
+    print(f"TOKEN_URL: {TOKEN_URL}")
+    print(f"code: {code[:10]}..." if code else "None")
+    print(f"redirectUri: {REDIRECT_URI}")
+    print(f"codeVerifier length: {len(auth_data['code_verifier'])}" if auth_data['code_verifier'] else "None")
+    
+    # Use camelCase parameter names to match the CamelCaseJSONParser
     data = {
         'grant_type': 'authorization_code',
         'code': code,
@@ -160,32 +179,61 @@ def exchange_code_for_tokens(code):
         'code_verifier': auth_data['code_verifier']  # Include the code_verifier for PKCE
     }
     
-    response = requests.post(TOKEN_URL, data=data)
+    # Print headers for debugging
+    headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+    print(f"Headers: {headers}")
     
-    if response.status_code == 200:
-        token_data = response.json()
+    # Try different client authentication methods
+    try:
+        print("\nTrying standard client credentials in request body...")
+        response = requests.post(TOKEN_URL, data=data, headers=headers, verify=False)
         
-        # Check if response uses camelCase or snake_case
-        if 'access_token' in token_data:
-            auth_data['access_token'] = token_data.get('access_token')
-            auth_data['refresh_token'] = token_data.get('refresh_token')
-            auth_data['token_type'] = token_data.get('token_type')
-            auth_data['expires_in'] = token_data.get('expires_in')
+        # If that fails with invalid_client, try HTTP Basic Auth
+        if response.status_code == 401 and 'invalid_client' in response.text:
+            print("\nTrying HTTP Basic Auth instead...")
+            response = requests.post(
+                TOKEN_URL,
+                auth=(CLIENT_ID, CLIENT_SECRET),
+                data={
+                    'grant_type': 'authorization_code',
+                    'code': code,
+                    'redirect_uri': REDIRECT_URI,
+                    'code_verifier': auth_data['code_verifier']
+                },
+                headers=headers, verify=False
+            )
+        
+        print(f"\nToken exchange response code: {response.status_code}")
+        print(f"Response headers: {response.headers}")
+        
+        if response.status_code == 200:
+            token_data = response.json()
+            print("Token exchange successful!")
+            
+            # Check if response uses camelCase or snake_case
+            if 'access_token' in token_data:
+                auth_data['access_token'] = token_data.get('access_token')
+                auth_data['refresh_token'] = token_data.get('refresh_token')
+                auth_data['token_type'] = token_data.get('token_type')
+                auth_data['expires_in'] = token_data.get('expires_in')
+            else:
+                auth_data['access_token'] = token_data.get('accessToken')
+                auth_data['refresh_token'] = token_data.get('refreshToken')
+                auth_data['token_type'] = token_data.get('tokenType')
+                auth_data['expires_in'] = token_data.get('expiresIn')
+            
+            print("\nAccess token received!")
+            print(f"Access Token: {auth_data['access_token'][:10]}...")
+            print(f"Token Type: {auth_data['token_type']}")
+            print(f"Expires In: {auth_data['expires_in']} seconds")
+            return True
         else:
-            auth_data['access_token'] = token_data.get('accessToken')
-            auth_data['refresh_token'] = token_data.get('refreshToken')
-            auth_data['token_type'] = token_data.get('tokenType')
-            auth_data['expires_in'] = token_data.get('expiresIn')
-        
-        print("\nAccess token received!")
-        print(f"Access Token: {auth_data['access_token'][:10]}...")
-        print(f"Token Type: {auth_data['token_type']}")
-        print(f"Expires In: {auth_data['expires_in']} seconds")
-        return True
-    else:
-        print(f"\nFailed to exchange code for tokens. Status: {response.status_code}")
-        print(f"Response: {response.text}")
-        return False
+            print(f"\nFailed to exchange code for tokens. Status: {response.status_code}")
+            print(f"Response: {response.text}")
+            return False
+    except Exception as e:
+        print(f"Exception during token exchange: {e}")
+        return None
 
 def get_user_info():
     """Get user information using the access token."""
@@ -193,7 +241,7 @@ def get_user_info():
         'Authorization': f"{auth_data['token_type']} {auth_data['access_token']}"
     }
     
-    response = requests.get(USER_INFO_URL, headers=headers)
+    response = requests.get(USER_INFO_URL, headers=headers, verify=False)
     
     if response.status_code == 200:
         user_info = response.json()
@@ -218,7 +266,7 @@ def refresh_access_token():
         'client_secret': CLIENT_SECRET
     }
     
-    response = requests.post(TOKEN_URL, data=data)
+    response = requests.post(TOKEN_URL, data=data, verify=False)
     
     if response.status_code == 200:
         token_data = response.json()
