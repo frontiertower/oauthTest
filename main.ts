@@ -2,11 +2,12 @@
 Minimal demo of Frontier Tower OAuth
 
 To use:
-  1. Generate a .secrets.json file
-  2. Run `deno run --allow-net --allow-read --allow-write --unstable-kv --watch ./main.ts 3141`
-  3. Go to the server and make sure the server matches `REDIRECT_URI` in `.secrets.json`.
-  4. Auth & deauth
-  5. The webapp also has basic notes functionality that is preservered across sessions for a given user.
+  1. `export CLIENT_SECRET=154b....`
+  2. `export CLIENT_ID=F5ojGQ...`
+  3. `export REDIRECT_URI=https://.../api/oauth`
+  4. Run `deno run --allow-net --allow-read --allow-write --unstable-kv --watch ./main.ts 3141`
+  5. Auth & deauth
+  6. The webapp also has basic notes functionality that is preserved across sessions for a given user.
 
 Design:
   0. Identify the browser with a cookie.
@@ -33,16 +34,15 @@ const CONFIG = {
     oauthTokenUrl: "https://api.berlinhouse.com/o/token/", // OAuth server POST endpoint for step 3
     oauthRevokeUrl: "https://api.berlinhouse.com/o/revoke_token/", // OAuth call to revoke token from step 6
     callbackPath: "/api/oauth",
-    kvPath: ".kv",
 }
 const SECRETS = Deno.env.toObject();
-if (new URL(CONFIG.REDIRECT_URI).pathname !== CONFIG.callbackPath) {
-    throw Error(`CONFIG redirect_uri's path "${CONFIG.REDIRECT_URI}" must match callbackPath "${CONFIG.callbackPath}"`);
+if (new URL(SECRETS.REDIRECT_URI).pathname !== CONFIG.callbackPath) {
+    throw Error(`CONFIG redirect_uri's path "${SECRETS.REDIRECT_URI}" must match callbackPath "${CONFIG.callbackPath}"`);
 }
 
-log(`Booting @ ${new Date()}`);
+log(`Booting @ ${new Date()} with ${JSON.stringify(SECRETS, null, 2)} ${JSON.stringify(CONFIG, null, 2)}`);
 
-const kv = await Deno.openKv(CONFIG.kvPath); // Deno key-value store.
+const kv = await Deno.openKv(); // Deno key-value store.
 
 function generate_code_verifier(): string {
     const array = new Uint8Array(64); // 64 bytes for 512 bits of entropy
@@ -141,7 +141,7 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
             return new Response(`${PREFIX}
                     <h1>OAuth User Page for User ${uid}</h1>
                     <p>Cookie: ${cookie}</p>
-                    <p><b>API call: ${response.status === 200 ? "SUCCESS" : "FAILED"}</b></p>
+                    <p><b>API call to <code>https://api.berlinhouse.com/o/userinfo/</code>: ${response.status === 200 ? "SUCCESS" : "FAILED"}</b></p>
                     <pre>${JSON.stringify(json, null, 2)}</pre>
                     <textarea id="data" rows=10 cols=50>${data.value}</textarea>
                     <br/>
@@ -187,7 +187,7 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
                 `${CONFIG.oauthAuthorizeUrl}` +
                 `?response_type=code` +
                 `&client_id=${SECRETS.CLIENT_ID}` +
-                `&redirect_uri=${encodeURIComponent(CONFIG.REDIRECT_URI)}` +
+                `&redirect_uri=${encodeURIComponent(SECRETS.REDIRECT_URI)}` +
                 `&scope=read write openid` +
                 `&state=${CSRF}` +
                 `&code_challenge=${code_challenge}` +
@@ -213,7 +213,7 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
         const body = new URLSearchParams({
             'grant_type': 'authorization_code',
             'code': oAuthCode!, // Use non-null assertion as code should be present
-            'redirect_uri': CONFIG.REDIRECT_URI,
+            'redirect_uri': SECRETS.REDIRECT_URI,
             'client_id': SECRETS.CLIENT_ID,
             'client_secret': SECRETS.CLIENT_SECRET,
             'code_verifier': code_verifier!, // Use non-null assertion as code_verifier should be present
