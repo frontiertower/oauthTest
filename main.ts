@@ -99,11 +99,38 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
 
     //////// Step 1:  Check if that cookie has an OAuth Token in KV
     const authRecord = await kv.get(['cookies', cookie, 'token']);
-    const isAuthenticated = authRecord.value ? true : false;
-    if (authRecord.value) {
-        log(`  Cookie ${cookie} has OAuth token`);
-    } else {
+    let isAuthenticated = authRecord.value ? true : false;
+    if (!isAuthenticated) {
         log(`  Cookie ${cookie} does not have OAuth token`);
+    } else if (new Date(authRecord.value?.expires_at) < new Date()) {
+        log(`  Cookie ${cookie} has expired OAuth token`);
+        const body = new URLSearchParams({
+            'grant_type': 'refresh_token',
+            'refresh_token': authRecord.value.refresh_token,
+            'client_id': SECRETS.CLIENT_ID,
+            'client_secret': SECRETS.CLIENT_SECRET,
+        }).toString();
+        const now = Date.now();
+        const response = await fetch(CONFIG.oauthTokenUrl, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body
+        });
+        const data = await response.json();
+        if (!data.error) {
+            data.expires_at = new Date(now + data.expires_in * 1000);
+            await kv.set(['cookies', cookie, 'token'], data);
+            authRecord.value = data;
+            log(`  Refreshed OAuth token for ${cookie}: ${data.access_token.substring(0, 8) + ".".repeat(data.access_token.length - 8)}`);
+        } else {
+            log(`  Refresh OAuth token FAILED for ${cookie}: ${JSON.stringify(data)}`);
+            await kv.delete(['cookies', cookie, 'token']);
+            isAuthenticated = false;
+        }
+    } else {
+        log(`  Cookie ${cookie} has valid OAuth token`);
     }
 
     //////// Define HTTP endpoints for "/" and "/api/*"
@@ -133,17 +160,21 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
                 headers
             });
             const json = await response.json();
-            const uid = json.sub;
-            kv.set(['cookies', cookie, 'id'], uid);
 
-            const data = await kv.get(['database', uid, 'data']);
+            let uid;
+            let data;
+            if (!json.error) {
+                uid = json.sub;
+                kv.set(['cookies', cookie, 'id'], uid);
+                data = await kv.get(['database', uid, 'data']);
+            }
 
             return new Response(`${PREFIX}
                     <h1>OAuth User Page for User ${uid}</h1>
                     <p>Cookie: ${cookie}</p>
                     <p><b>API call to <code>https://api.berlinhouse.com/o/userinfo/</code>: ${response.status === 200 ? "SUCCESS" : "FAILED"}</b></p>
                     <pre>${JSON.stringify(json, null, 2)}</pre>
-                    <textarea id="data" rows=10 cols=50>${data.value}</textarea>
+                    <textarea id="data" rows=10 cols=50>${data?.value}</textarea>
                     <br/>
                     <button onclick="save()">Save</button>
                     <button onclick="logout()">Log out</button>
@@ -220,8 +251,8 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
         }).toString();
         log(`  Token exchange request body: ${body}`);
 
+        const now = Date.now();
         const response = await fetch(CONFIG.oauthTokenUrl, {
-
             method: "POST",
             headers: {
                 "Content-Type": "application/x-www-form-urlencoded",
@@ -231,6 +262,7 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
         const data = await response.json();
         if (!data.error) {
             // SUCCESS. Foward the user back to the main page
+            data.expires_at = new Date(now + data.expires_in * 1000);
             await kv.set(['cookies', cookie, 'token'], data);
             log(`  Saved OAuth token for ${cookie}: ${data.access_token.substring(0, 8) + ".".repeat(data.access_token.length - 8)}`);
             log(`  Sending user home.`);
