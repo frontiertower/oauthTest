@@ -106,7 +106,7 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
         log(`  Cookie ${cookie} has expired OAuth token`);
         const body = new URLSearchParams({
             'grant_type': 'refresh_token',
-            'refresh_token': authRecord.value.refresh_token,
+            'refresh_token': authRecord.value?.refresh_token,
             'client_id': SECRETS.CLIENT_ID,
             'client_secret': SECRETS.CLIENT_SECRET,
         }).toString();
@@ -283,19 +283,21 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
         //////// Step 6: Revoke the OAuth token
         const authRecord = await kv.get(['cookies', cookie, 'token']);
         if (authRecord.value) {
-            await kv.delete(['cookies', cookie, 'token']);
+            const body = new URLSearchParams({
+                'client_id': SECRETS.CLIENT_ID,
+                'client_secret': SECRETS.CLIENT_SECRET,
+                'token': authRecord.value.access_token,
+            }).toString();
             const response = await fetch(CONFIG.oauthRevokeUrl, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    access_token: authRecord.value,
-                })
+              method: "POST",
+              headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+              },
+              body
             });
-            const data = await response.json();
-            if (!data.error) {
-                log(`  Revoked OAuth token for ${cookie}: ${authRecord.value.substring(0, 8) + ".".repeat(authRecord.value.length - 8)}`);
+
+            if (response.status === 200) {
+                log(`  Revoked OAuth token for ${cookie}: ${authRecord.value.access_token.substring(0, 8) + ".".repeat(authRecord.value.access_token.length - 8)}`);
                 await kv.delete(['cookies', cookie, 'token']);
                 log(`  Sending user home.`);
 
@@ -304,7 +306,7 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
                     headers: { 'Location': '/' },
                 });
             } else {
-                log(`  Revoke OAuth token FAILED for ${cookie}`);
+                log(`  Revoke OAuth token FAILED for ${cookie} ${response.status}`);
                 return new Response("Logout failed", { status: 500 });
             }
         } else {
