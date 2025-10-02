@@ -1,0 +1,31 @@
+{
+  "tasks": {
+    "dev": "deno run --allow-env --allow-net --allow-read --allow-write --unstable-kv --watch ./main.ts",
+    "deploy": "deno check main.ts && deno lint main.ts && deno run -A jsr:@deno/deployctl deploy"
+  },
+
+  "deploy": {
+    "project": "5efae5b9-b697-4e9b-a1e5-fa71505c995a",
+    "exclude": [
+      "**/node_modules"
+    ],
+    "include": [
+      "main.ts"
+    ],
+    "entrypoint": "main.ts"
+  },
+  
+  "compilerOptions": {
+    "lib": [
+      "deno.ns",
+      "deno.unstable",
+      "dom",
+      "dom.iterable"
+    ],
+    "strict": true
+  },
+  
+  "imports": {
+    "@deno/deployctl": "jsr:@deno/deployctl@^1.13.1"
+  }
+}

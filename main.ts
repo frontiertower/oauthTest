@@ -5,7 +5,7 @@ To use:
   1. `export CLIENT_SECRET=154b....`
   2. `export CLIENT_ID=F5ojGQ...`
   3. `export REDIRECT_URI=https://.../api/oauth`
-  4. Run `deno run --allow-net --allow-read --allow-write --unstable-kv --watch ./main.ts 3141`
+  4. Run `deno task dev` and go to https://localhost:9002
   5. Auth & deauth
   6. The webapp also has basic notes functionality that is preserved across sessions for a given user.
 
@@ -18,7 +18,6 @@ Design:
   5. Save data to KV for authenticated users
   6. Revoke the OAuth token
 */
-//////// deno run --allow-net --allow-read --allow-write --unstable-kv --watch ./main.ts 3141
 
 const start = Date.now();
 function log(msg: string) {
@@ -70,9 +69,14 @@ async function generate_code_challenge(code_verifier: string): Promise<string> {
         .replace(/=+$/, '');
 }
 
-
-
-
+type AuthRecord = {
+    value: {
+        expires_at: Date;
+        refresh_token: string;
+        token_type: string;
+        access_token: string;
+    }
+}
 
 async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Promise<Response> {
     const url = new URL(req.url);
@@ -98,7 +102,7 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
     }
 
     //////// Step 1:  Check if that cookie has an OAuth Token in KV
-    const authRecord = await kv.get(['cookies', cookie, 'token']);
+    const authRecord = await kv.get(['cookies', cookie, 'token']) as AuthRecord;
     let isAuthenticated = authRecord.value ? true : false;
     if (!isAuthenticated) {
         log(`  Cookie ${cookie} does not have OAuth token`);
@@ -161,16 +165,14 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
             });
             const json = await response.json();
 
-            let uid;
             let data;
             if (!json.error) {
-                uid = json.sub;
-                kv.set(['cookies', cookie, 'id'], uid);
-                data = await kv.get(['database', uid, 'data']);
+                kv.set(['cookies', cookie, 'id'], json.id);
+                data = await kv.get(['database', json.id, 'data']);
             }
 
             return new Response(`${PREFIX}
-                    <h1>OAuth User Page for User ${uid}</h1>
+                    <h1>OAuth User Page for User ${json?.id}</h1>
                     <p>Cookie: ${cookie}</p>
                     <p><b>API call to <code>https://api.berlinhouse.com/o/userinfo/</code>: ${response.status === 200 ? "SUCCESS" : "FAILED"}</b></p>
                     <pre>${JSON.stringify(json, null, 2)}</pre>
@@ -236,7 +238,7 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
         const params = new URLSearchParams(url.search);
         const oAuthCode = params.get("code");
         const codeVerifierRecord = await kv.get(['cookies', cookie, 'code_verifier']);
-        const code_verifier = codeVerifierRecord.value;
+        const code_verifier = codeVerifierRecord.value as string;
         const csrfState = params.get("state");
         const csrf = await kv.get(['cookies', cookie, 'CSRF']);
 
@@ -281,7 +283,7 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
         );
     } else if (pathname === "/api/logout" && req.method === "POST") {
         //////// Step 6: Revoke the OAuth token
-        const authRecord = await kv.get(['cookies', cookie, 'token']);
+        const authRecord = await kv.get(['cookies', cookie, 'token']) as AuthRecord;
         if (authRecord.value) {
             const body = new URLSearchParams({
                 'client_id': SECRETS.CLIENT_ID,
@@ -320,12 +322,13 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
         //////// Step 5: Save data to KV for authenticated users
         const authRecord = await kv.get(['cookies', cookie, 'token']);
         if (authRecord.value) {
-            const uidRecord = await kv.get(['cookies', cookie, 'id']);
+            const uidRecord = await kv.get(['cookies', cookie, 'id']) as Deno.KvEntryMaybe<Deno.KvKeyPart>;
+            console.log(uidRecord);
             const uid = uidRecord.value;
             if (uid) {
                 const data = await req.text();
                 await kv.set(['database', uid, 'data'], data);
-                log(`  Saved data for user ${uid}`);
+                log(`  Saved data for user ${String(uid)}`);
                 return new Response("Data saved", { status: 200 });
             } else {
                 log(`  User ${cookie} is authenticated but no uid found`);
@@ -338,7 +341,7 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
     }
 
     return new Response(
-        `${PREFIX} Unhandled path ${pathname}: <pre>${JSON.stringify(Object.fromEntries(req.headers), null, 2)}</pre>${SUFFIX}`,
+        `${PREFIX} Unhandled path ${pathname}: <pre>${JSON.stringify(req.headers.entries(), null, 2)}</pre>${SUFFIX}`,
         {
             status: 404, headers: responseHeaders
         }
