@@ -1,12 +1,12 @@
 #!/usr/bin/env python
 """
-OAuth 2.0 Test Script for BerlinHouse API
+OAuth 2.0 Test Script for FrontierTower API
 
-This script simulates the OAuth 2.0 flow to test BerlinHouse's OAuth implementation.
+This script simulates the OAuth 2.0 flow to test :erlinHouse's OAuth implementation.
 It includes both the client-side and server-side aspects of the flow.
 
 Steps:
-1. Generate an authorization URL (simulates "Login with BerlinHouse" button)
+1. Generate an authorization URL (simulates "Login with FrontierTower" button)
 2. Open the URL in a browser and manually authorize (user interaction required)
 3. Capture the authorization code from the callback URL
 4. Exchange the authorization code for access and refresh tokens
@@ -43,7 +43,7 @@ if not CLIENT_ID or not CLIENT_SECRET:
     # CLIENT_SECRET = "your_client_secret_here"
     
 REDIRECT_URI = "https://9000-firebase-oauthtest-1755815235789.cluster-cmxrewsem5htqvkvaud2drgfr4.cloudworkstations.dev/api/oauth"
-API_BASE_URL = "https://api.berlinhouse.com"
+API_BASE_URL = "https://api.frontiertower.io"
 AUTHORIZATION_URL = f"{API_BASE_URL}/o/authorize/"
 TOKEN_URL = f"{API_BASE_URL}/o/token/"
 USER_INFO_URL = f"{API_BASE_URL}/o/userinfo/"
@@ -296,7 +296,7 @@ def refresh_access_token():
 def main():
     """Run the full OAuth flow."""
     print("=" * 80)
-    print("BerlinHouse OAuth 2.0 Test Script")
+    print("FrontierTower OAuth 2.0 Test Script")
     print("=" * 80)
     
     # Check if the user provided client credentials

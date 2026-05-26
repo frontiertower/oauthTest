@@ -29,9 +29,9 @@ const CONFIG = {
     port: parseInt(Deno.args.at(0) || "9002"),
 
     REDIRECT_URI: `https://9000-firebase-oauthtest-1755815235789.cluster-cmxrewsem5htqvkvaud2drgfr4.cloudworkstations.dev/api/oauth`, // Url of the app server that recieves the callback from Oauth server.
-    oauthAuthorizeUrl: "https://api.berlinhouse.com/o/authorize/", // Oauth server's auth endpoint for step 2
-    oauthTokenUrl: "https://api.berlinhouse.com/o/token/", // OAuth server POST endpoint for step 3
-    oauthRevokeUrl: "https://api.berlinhouse.com/o/revoke_token/", // OAuth call to revoke token from step 6
+    oauthAuthorizeUrl: "https://api.frontiertower.io/o/authorize/", // Oauth server's auth endpoint for step 2
+    oauthTokenUrl: "https://api.frontiertower.io/o/token/", // OAuth server POST endpoint for step 3
+    oauthRevokeUrl: "https://api.frontiertower.io/o/revoke_token/", // OAuth call to revoke token from step 6
     callbackPath: "/api/oauth",
 }
 const SECRETS = Deno.env.toObject();
@@ -160,7 +160,7 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
                 "Authorization": `${authRecord.value.token_type} ${authRecord.value.access_token}`,
             }
 
-            const response = await fetch(`https://api.berlinhouse.com/o/userinfo/`, {
+            const response = await fetch(`https://api.frontiertower.io/o/userinfo/`, {
                 headers
             });
             const json = await response.json();
@@ -174,7 +174,7 @@ async function mainHandler(req: Request, _connInfo: Deno.ServeHandlerInfo): Prom
             return new Response(`${PREFIX}
                     <h1>OAuth User Page for User ${json?.id}</h1>
                     <p>Cookie: ${cookie}</p>
-                    <p><b>API call to <code>https://api.berlinhouse.com/o/userinfo/</code>: ${response.status === 200 ? "SUCCESS" : "FAILED"}</b></p>
+                    <p><b>API call to <code>https://api.frontiertower.io/o/userinfo/</code>: ${response.status === 200 ? "SUCCESS" : "FAILED"}</b></p>
                     <pre>${JSON.stringify(json, null, 2)}</pre>
                     <textarea id="data" rows=10 cols=50>${data?.value}</textarea>
                     <br/>
